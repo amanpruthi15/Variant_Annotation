@@ -1,57 +1,113 @@
 #!/bin/bash
-# Aman Pruthi 18MAR2024
-# Description - Variant annotation using Ensemble VEP
-# Input - VCF files generated using GATK Haplotypecaller
-# Output - Annotated VCF files, HTML summaries, filtered TSV files, Annotated-vcf files with AF and Depth
+# Aman Pruthi 12AUG2025
+# Description: Annotate variants using VEP and summarize the annotations into an excel output
+# Usage: bash vep_variant_annotation.sh Sample-Info.txt
 
-mkdir -p ${PWD}/Variant-analysis_VEP
-grep -v '#' ${PWD}/*Sample-Info.txt > ${PWD}/Sample-Info-for-VEP.txt
-sample_info_file=${PWD}/Sample-Info-for-VEP.txt
+Sample_Info_File="$1"
+Date=$(date +"%Y-%m-%d")
+Log_File="variant_annotation_pipeline_${Date}_$(date +"%H-%M-%S").log"
+mkdir -p "${PWD}/Variant-analysis_VEP"
 
-##########################################
-# 1. Annotate VCF files using Esemble VEP
-##########################################
+exec > >(tee -a "$Log_File") 2>&1
 
-while IFS= read -r line; do
-	sample_id=$(echo "$line" | awk '{print $1}')
-	echo "Processing sample ID: $sample_id"
-	/home/act/software/apruthi/ensembl-vep-release-111.0/vep \
-		-i vcf_Haplotypecaller/${sample_id}.vcf \
-		-o ${PWD}/Variant-analysis_VEP/${sample_id}_vep_annotated.vcf \
-		--format vcf --vcf --symbol --terms SO --tsl --biotype --hgvs \
-		--fasta /home/act/database/hsa/genome/hg38/hisat2_index_exome_ucsc/hg38.fa --offline \
-		--cache --dir_cache /home/act/database/vep --everything  \
-		--dir_plugins /home/act/database/vep/Plugins --force_overwrite \
-		>> ${PWD}/Variant-analysis_VEP/${sample_id}_VEP_annotation.log
-done < $sample_info_file
+log() {
+    echo "$(date +"%Y-%m-%d %H:%M:%S") - $1"
+}
 
-##########################################
-# 2. Filter annotated VCFs to generate TSV files for each unique variant
-##########################################
+log "Pipeline started."
+log "Sample info file: $Sample_Info_File"
 
-while IFS= read -r line; do     
-	sample_id=$(echo "$line" | awk '{print $1}')
-	sed 's/|/\t/g' ${PWD}/Variant-analysis_VEP/${sample_id}_vep_annotated.vcf > ${PWD}/Variant-analysis_VEP/${sample_id}_tmp.vcf
-	header=`paste <(tail -n+61 ${PWD}/Variant-analysis_VEP/${sample_id}_tmp.vcf | head -1| sed 's/FORMAT.*//g') <(tail -n+59 ${PWD}/Variant-analysis_VEP/${sample_id}_tmp.vcf | head -1| sed 's/^.*Con/Con/g'| sed 's/">//g')`
-	cat <(echo $header| sed 's/ /\t/g') <(tail -n+62 ${PWD}/Variant-analysis_VEP/${sample_id}_tmp.vcf) | \
-		cut -f1,2,4,5,6,7,9,10,11,18,19,25,29,77 > ${PWD}/Variant-analysis_VEP/${sample_id}_filtered.tsv; 
-done < $sample_info_file
+Sample_Info=$(tail -n+2 "$Sample_Info_File" | cut -f1)
 
-##########################################
-# 3. Add missing info in filtered TSVs from VCFs generated from GATK Haplotypecaller
-##########################################
+# Prompt all questions upfront
+read -p "Do you want to run annotation? (y/n): " run_annotation
+read -p "Do you want to summarize annotated variants? (y/n): " run_summary
 
-mkdir -p ${PWD}/Variant-analysis_VEP/Results
+if [[ "$run_summary" =~ ^[Yy]$ ]]; then
+    read -p "Is this an annotation for the CAP-PT samples? (y/n): " is_cap_pt
+    if [[ "$is_cap_pt" =~ ^[Yy]$ ]]; then
+        read -p "Please provide path to the list of transcripts: " transcript_file
+        log "CAP-PT transcript file: $transcript_file"
+    fi
+fi
 
-while IFS= read -r line; do
-	sample_id=$(echo "$line" | awk '{print $1}')
-	grep -v '#' vcf_Haplotypecaller/${sample_id}.vcf | cut -f1,2,4,5,10 | sed 's/:/\t/g'| sed 's/,/\t/g'| cut -f1,2,3,4,5,6,7,8 | \
-	awk '$9=$7/$8' OFS='\t' > ${PWD}/Variant-analysis_VEP/${sample_id}_tmp.tsv
-	cat <(echo -e "Chr\tPos\tRef\tAlt\tGT\tDepth\tRefDepth\tAltDepth\tAF\tQual\tFilt\tConsequence\tImpact\tGene\tVariant_Transcript\tProtein_Change\tExisting_Variation\tVariation_Type\tClinical_Significance") \
-	<(awk 'BEGIN {FS=OFS="\t"} NR==FNR {a[$1,$2]=$0; next} ($1,$2) in a {print a[$1,$2],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14}' \
-	${PWD}/Variant-analysis_VEP/${sample_id}_tmp.tsv ${PWD}/Variant-analysis_VEP/${sample_id}_filtered.tsv) \
-	> ${PWD}/Variant-analysis_VEP/Results/${sample_id}_annotated-vcf.tsv
-done < $sample_info_file
+# Validate user choices
+if [[ "$run_annotation" =~ ^[Nn]$ ]] && [[ "$run_summary" =~ ^[Nn]$ ]]; then
+    log "No action taken. Exiting."
+    exit 0
+fi
 
-rm ${PWD}/Variant-analysis_VEP/*tmp*
-rm ${PWD}/Sample-Info-for-VEP.txt
+# ===========================
+# Step 1: Annotation
+# ===========================
+if [[ "$run_annotation" =~ ^[Yy]$ ]]; then
+    log "Annotation mode selected."
+
+    for sample_id in $Sample_Info; do
+        log "Running annotation for $sample_id"
+        /home/act/software/apruthi/ensembl-vep-release-111.0/vep \
+            -i vcf_Haplotypecaller/${sample_id}.vcf \
+            -o ${PWD}/Variant-analysis_VEP/${sample_id}_vep_annotated.vcf \
+            --format vcf --vcf --symbol --terms SO --tsl --biotype --hgvs \
+            --fasta /home/act/database/hsa/genome/hg38/hisat2_index_exome_ucsc/hg38.fa \
+            --offline --refseq --cache \
+            --dir_cache /home/act/database/vep \
+            --dir_plugins /home/act/database/vep/Plugins \
+            --plugin RefSeqHGVS \
+            --plugin ReferenceQuality \
+            --everything --force_overwrite \
+            >> ${PWD}/Variant-analysis_VEP/${sample_id}_VEP_annotation.log 2>&1
+        log "Finished annotation for $sample_id"
+    done
+fi
+
+# ===========================
+# Step 2: Summarization
+# ===========================
+if [[ "$run_summary" =~ ^[Yy]$ ]]; then
+    log "Summarization mode selected."
+
+    for sample_id in $Sample_Info; do
+        log "Summarizing $sample_id"
+
+        grep -v '#' Variant-analysis_VEP/${sample_id}_vep_annotated.vcf \
+            | awk -F '\t' '{print $1,$2,$4,$5,$7,$10,$8}' OFS='\t' \
+            | sed 's/AC..*CSQ=//g' \
+            | awk -F'\t' 'BEGIN{OFS=FS} {$6 = gensub(/:/, "\t", "g", $6); print}' \
+            | awk -F'\t' 'BEGIN{OFS=FS} {$7 = gensub(/,/, "\t", "g", $7); print}' \
+            | cut -f1-9,12- \
+            | awk -F'\t' 'BEGIN{OFS=FS} {$10 = gensub(/,/, "\t", "g", $10); print}' \
+            > Variant-analysis_VEP/${sample_id}_tmp.tsv
+
+        if [[ "$is_cap_pt" =~ ^[Yy]$ ]]; then
+            awk -F'\t' -v list="$transcript_file" '
+                BEGIN{OFS=FS;while((getline<list)>0)pats[++n]=$0}
+                {out="";for(i=10;i<=NF;i++){for(p=1;p<=n;p++)if(index($i,pats[p])){out=out OFS $i;break}}
+                 if(out!=""){for(i=1;i<=9;i++)printf "%s%s",$i,OFS;sub(/^\t/,"",out);print out}}
+            ' Variant-analysis_VEP/${sample_id}_tmp.tsv > Variant-analysis_VEP/${sample_id}_filtered.tsv
+        else
+            cut -f-10 Variant-analysis_VEP/${sample_id}_tmp.tsv > Variant-analysis_VEP/${sample_id}_filtered.tsv
+        fi
+
+        sed 's/|/\t/g' Variant-analysis_VEP/${sample_id}_filtered.tsv \
+            | cut -f-9,10-13,16,20,21,27,29,31,84 \
+            > Variant-analysis_VEP/${sample_id}_final.tsv
+
+        {
+            echo -e "Chr\tPosition\tRef\tAlt\tFilter\tGenotype\tRef_Depth\tAlt_Depth\tTotal_Depth\tNucleotide_Change\tVariant_Classification\tImpact\tGene\tTranscript_ID\tCDS_Change\tProtein_Change\tdbSNP\tStrand\tVariant_Type\tClinical_Significance"
+            cat Variant-analysis_VEP/${sample_id}_final.tsv
+        } > Variant-analysis_VEP/${sample_id}_final_with_header.tsv
+    done
+
+    log "Summarization complete."
+
+    mkdir -p "${PWD}/Variant-analysis_VEP/Results"
+    mv ${PWD}/Variant-analysis_VEP/*header.tsv ${PWD}/Variant-analysis_VEP/Results
+    rename '_final_with_header' '' ${PWD}/Variant-analysis_VEP/Results/*tsv
+
+    log "Combining VEP summaries into Excel."
+    python3 /home/act/software/apruthi/combine_text_to_excel.py ${PWD}/Variant-analysis_VEP/Results/ "${Date}_vep_summaries.xlsx" tsv
+
+fi
+
+log "Pipeline finished."
