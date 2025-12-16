@@ -1,3 +1,5 @@
+# Combined all .txt files in one excel report
+
 import os
 import sys
 import pandas as pd
