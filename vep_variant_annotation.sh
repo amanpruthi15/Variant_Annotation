@@ -45,14 +45,14 @@ if [[ "$run_annotation" =~ ^[Yy]$ ]]; then
 
     for sample_id in $Sample_Info; do
         log "Running annotation for $sample_id"
-        /home/act/software/apruthi/ensembl-vep-release-111.0/vep \
+        ensembl-vep-release-111.0/vep \
             -i vcf_Haplotypecaller/${sample_id}.vcf \
             -o ${PWD}/Variant-analysis_VEP/${sample_id}_vep_annotated.vcf \
             --format vcf --vcf --symbol --terms SO --tsl --biotype --hgvs \
-            --fasta /home/act/database/hsa/genome/hg38/hisat2_index_exome_ucsc/hg38.fa \
+            --fasta hg38.fa \
             --offline --refseq --cache \
-            --dir_cache /home/act/database/vep \
-            --dir_plugins /home/act/database/vep/Plugins \
+            --dir_cache vep \
+            --dir_plugins vep/Plugins \
             --plugin RefSeqHGVS \
             --plugin ReferenceQuality \
             --everything --force_overwrite \
@@ -106,7 +106,7 @@ if [[ "$run_summary" =~ ^[Yy]$ ]]; then
     rename '_final_with_header' '' ${PWD}/Variant-analysis_VEP/Results/*tsv
 
     log "Combining VEP summaries into Excel."
-    python3 /home/act/software/apruthi/combine_text_to_excel.py ${PWD}/Variant-analysis_VEP/Results/ "${Date}_vep_summaries.xlsx" tsv
+    python3 combine_text_to_excel.py ${PWD}/Variant-analysis_VEP/Results/ "${Date}_vep_summaries.xlsx" tsv
 
 fi
 
